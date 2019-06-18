@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+
+import numpy as np
+import matplotlib.pyplot as plt
+import datetime as dt
+import pytz
+
+import astroplan
+from astroplan import FixedTarget
+from astroplan import Observer
+
+
+import astropy
+from astropy.time import Time
+from astropy.coordinates import EarthLocation
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+
+
+fmt = '%Y-%m-%d %H:%M:%S'# %Z%z'
+
+current_time = dt.datetime.now()
+print('Current time is' , current_time)
+UTC = pytz.timezone('UTC')
+UTC_time = current_time.astimezone(UTC)
+print('UTC time is' , UTC_time.strftime(fmt))
+
+
+
+# ARGUMENTS
+
+import argparse
+parser = argparse.ArgumentParser()
+
+parser.add_argument("-s" ,
+                    "--start",
+                    help = "Observation start time as hh:mm (in 24hr time),"+
+                    " assuming start date is the date this program is being "+
+                    " run. Can also be given as yyyy-mm-dd hh:mm:ss using "+
+                    " the first argument for the desired date and the second "+
+                    " for the desired time.",
+                    type = str,
+                    default = UTC_time.strftime(fmt),
+                    nargs = "+")
+
+parser.add_argument("-e",
+                    "--end",
+                    help = "Observation end time as yyyy-mm-dd hh:mm:ss",
+                    type = str,
+                    default = UTC_time.strftime(fmt),
+                    nargs = 2)
+
+parser.add_argument("-l",
+                    "--location",
+                    help = "Takes the name of the observatory being used "+
+                    "and finds the coordinates from a list of observatories. "+
+                    " Use -o for list of observatories "
+                    ,type = str)
+
+parser.add_argument("-c",
+                    "--coordinates",
+                    help = "Takes observer coordinates as longitude (deg), "+
+                    "latitude (deg), elevation (m). Defaults to the Veritas "+
+                    "site if no argument given ",
+                    type = float,
+                    nargs = 3,
+                    default = [-110.95019 , 31.675 , 1268])
+
+parser.add_argument("-o",
+                    "--observatories",
+                    help = "Type any input for list of recorded observatories"
+                    ,type = str)
+
+# parser.add_argument("-t",
+#                     "--target",
+#                     help = "Takes the name of the target to be observed",
+#                     type = str)
+#
+# parser.add_argument("-T",
+#                     "--Target",
+#                     help = "Takes target coordinates as Right Ascension,"+
+#                     "Declination",
+#                     type = float,
+#                     nargs = 2)
+#
+# parser.add_argument("-n",
+#                     "--name",
+#                     help = "Name of target being observed. Can be used if"+
+#                     "the object being observed is not in the default list"+
+#                     "of objects or if an unnamed object is being observed",
+#                     type = str)
+
+parser.add_argument("-t",
+                    "--target",
+                    help = "Given 1 argument: Takes given argument as the "+
+                    "name of the target object and finds its Right Ascension "+
+                    "and Declination."+
+                    "Given 2 arguments: Takes the first given argument as the "+
+                    "Right Ascension (deg) and the second as the Declination "+
+                    "(deg) of the target object. "+
+                    "Given 3 arguments: Takes first argument as the target "+
+                    "name, the second argument as the target Right Ascension "+
+                    "(deg) and the third argument as the target "+
+                    "Declination (deg) ",
+                    nargs = "+")
+
+
+args = parser.parse_args()
+
+###### FUNCTIONS
+
+# Time
+
+start = ' '.join(str(i) for i in args.start)
+print(start)
+
+if np.size(args.start) == 2:    # if full time and date information is given
+    try:
+        start = ' '.join(str(i) for i in args.start)
+        Observation_Start = Time(start)
+        print("Observation Start =" , Observation_Start)
+    except:
+        print("Invalid time format 1")
+elif np.size(args.start) == 1:  # if only time information is given
+    try:
+        fmt1 = '%Y-%m-%d' #%H:%M:%S %Z%z'
+        start = (UTC_time.strftime(fmt1) , args.start[0])
+        print(start)
+        Observation_Start = Time(' '.join(str(i) for i in start))
+        print("Observation Start =" , Observation_Start)
+    except:
+        print("Invalid time format given 2")
+else:
+    print("Observation Start =" , args.start)
+
+print("Observation End =" , args.end)
+
+# Location
+
+if args.observatories != None:
+    print(astropy.coordinates.EarthLocation.get_site_names())
+elif args.location != None:
+    observer = Observer.at_site(args.location)
+    print(observer)
+else:
+    observer = Observer(location = EarthLocation.from_geodetic(
+    args.coordinates[0]*u.deg , args.coordinates[1]*u.deg ,
+    args.coordinates[2]*u.m))
+    print(observer)
+# else:
+#     observer = Observer(location = args.coordinates)
+#     print(observer)
+
+# Target
+
+# if args.Target != None and args.name != None:
+#     coord = SkyCoord(ra = args.Target[0]*u.deg , dec = args.Target[1]*u.deg)
+#     target = FixedTarget(coord = coord, name = args.name)
+#     print(target)
+# elif args.Target != None and args.name == None:
+#     coord = SkyCoord(ra = args.Target[0]*u.deg , dec = args.Target[1]*u.deg)
+#     target = FixedTarget(coord = coord, name = "Target Object")
+#     print(target)
+# elif args.target != None:
+#     target = FixedTarget.from_name(args.target)
+#     print(target)
+# else:
+#     print("No valid object given")
+
+# print(' '.join(str(i) for i in args.target))
+
+if np.size(args.target) == 4:   # In case somebody enters a two word Name
+                                # like Crab Nebula and also inputs
+                                # coordinates
+    name = (args.target[0] , args.target[1])
+    name = ' '.join(str(i) for i in name)
+    coord = SkyCoord(ra = float(args.target[2])*u.deg,
+    dec = float(args.target[3])*u.deg)
+    target = FixedTarget(coord = coord , name = name)
+    print(target)
+elif np.size(args.target) == 3:   # runs if name and coordinates are given
+    coord = SkyCoord(ra = float(args.target[1])*u.deg,
+    dec = float(args.target[2])*u.deg)
+    target = FixedTarget(coord = coord , name = args.target[0])
+    print(target)
+
+elif np.size(args.target) == 2: # runs if two target arguments are given
+                                # checks if the given arguments are float or
+                                # string in case an object name consists of
+                                # two words eg. Crab Nebula so not to confuse
+                                # two strings with two floats
+    try:
+        target = FixedTarget.from_name(' '.join(str(i) for i in args.target) )
+        print(target)
+    except:
+        coord = SkyCoord(ra = float(args.target[0])*u.deg,
+        dec = float(args.target[1])*u.deg)
+        target = FixedTarget(coord = coord , name = "Target Object")
+        print(target)
+
+else:   # runs if a single argument is given
+    try:
+        target = FixedTarget.from_name(args.target[0])
+        print(target)
+    except:
+        print("No valid object given")
+
+
+# time, observer location and target coordinates are all working
