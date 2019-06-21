@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+
+import numpy as np
+import matplotlib.pyplot as plt
+import datetime as dt
+import pytz
+from tzlocal import get_localzone
+
+import astroplan
+from astroplan import FixedTarget
+from astroplan import Observer
+
+import astropy
+from astropy.time import Time
+from astropy.coordinates import EarthLocation
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+from astropy.io import ascii
+
+from timezonefinder import TimezoneFinder
+tf = TimezoneFinder()
+
+# from astroplan import download_IERS_A
+# download_IERS_A()
+
+
+
+fmt = '%Y-%m-%d %H:%M:%S'# %Z%z'
+
+current_time = dt.datetime.now()
+local_timezone = get_localzone()
+
+print('Current time is' , current_time.astimezone(local_timezone))
+# print("Local Sidereal Time =",
+#       Observer.local_sidereal_time(time = current_time,
+#                                    self = local_timezone))
+# need to figure out how to make sidereal time work
+
+UTC = pytz.timezone('UTC')
+UTC_time = current_time.astimezone(UTC)
+print('UTC time is' , UTC_time.strftime(fmt))
+
+
+
+# ARGUMENTS #####################################################
+
+import argparse
+parser = argparse.ArgumentParser()
+
+###################################################
+parser.add_argument("-s" ,
+                    "--start",
+                    help = "Observation start time (local time, not UTC) as "+
+                    "hh:mm (in 24hr time). Defaults to the time and date on "+
+                    "which this program is being run. Can also be given as "+
+                    "yyyy-mm-dd hh:mm:ss using the first argument for the "+
+                    "desired date and the second for the desired time.",
+                    default = current_time.astimezone(local_timezone),
+                    nargs = "+")
+
+######################################################
+
+parser.add_argument("-e",
+                    "--end",
+                    help = "Observation end time (local time, not UTC) as "+
+                    "hh:mm (in 24hr time). Defaults to the time and date on "+
+                    "which this program is being run. Can also be given as "+
+                    "yyyy-mm-dd hh:mm:ss using the first argument for the "+
+                    "desired date and the second for the desired time.",
+                    default = current_time.astimezone(local_timezone),
+                    nargs = "+")
+
+######################################################
+
+parser.add_argument("-l",
+                    "--location",
+                    help = "Takes the name of the observatory being used "+
+                    "and finds the coordinates from a list of observatories. "+
+                    " Use -o for list of observatories. "
+                    ,type = str)
+
+######################################################
+
+parser.add_argument("-c",
+                    "--coordinates",
+                    help = "Takes observer coordinates as longitude (deg), "+
+                    "latitude (deg), elevation (m). Defaults to the Veritas "+
+                    "site if no argument given. ",
+                    type = float,
+                    nargs = 3)
+                    #default = [-110.95019 , 31.675 , 1268])
+
+######################################################
+
+parser.add_argument("-o",
+                    "--observatories",
+                    help = "Type any input for list of recorded observatories."
+                    ,type = str)
+
+######################################################
+
+parser.add_argument("-t",
+                    "--target",
+                    help = "Takes either a single target or a list of "+
+                    "targets. A list of targets must be given as the location "+
+                    "of a .txt file. The .txt file must contain either target "+
+                    "names only or target name with RA and Dec in degrees. "+
+                    "Can calculate RA and Dec automatically "+
+                    "from target name but also accepts manual input of RA "+
+                    "and Dec. For a single target, its information can be "+
+                    "given using 1-3 arguments. Given 1 argument: Takes "+
+                    "given argument as the name of the target object "+
+                    "and finds its Right Ascension and Declination. "+
+                    "Given 2 arguments: Takes the first given argument as "+
+                    "the Right Ascension (deg) and the second as the "+
+                    "Declination (deg) of the target object. "+
+                    "Given 3 arguments: Takes first argument as the target "+
+                    "name, the second argument as the target Right Ascension "+
+                    "(deg) and the third argument as the target "+
+                    "Declination (deg). ",
+                    nargs = "+")
+
+######################################################
+
+
+args = parser.parse_args()
+
+###### FUNCTIONS ################################################
+
+
+
+# Location
+print("location")
+
+if args.observatories != None:
+    print(astropy.coordinates.EarthLocation.get_site_names())
+elif args.location != None: # uses site name to find coordinates
+                            # and time zone of named observatory
+    observer = EarthLocation.of_site(args.location)
+    # use .geodetic to extract latitude and longitude
+    observatory_timezone = tf.closest_timezone_at(
+                                        lng=float(observer.geodetic[0]/u.deg),
+                                        lat=float(observer.geodetic[1]/u.deg))
+    observer = Observer.at_site(args.location,
+                                timezone = observatory_timezone)
+    print("Observatory timezone =" , observatory_timezone)
+    observatory_timezone = pytz.timezone(observatory_timezone)
+    print(observer)
+elif args.coordinates != None:
+    observer = Observer(location = EarthLocation.from_geodetic(
+    args.coordinates[0]*u.deg,
+    args.coordinates[1]*u.deg,
+    args.coordinates[2]*u.m),
+    name = "Observer Location",
+    timezone = tf.closest_timezone_at(lng = args.coordinates[0],
+                              lat = args.coordinates[1]))
+    observatory_timezone = tf.closest_timezone_at(lng = args.coordinates[0],
+                                                  lat = args.coordinates[1])
+    print("Observatory timezone =" , observatory_timezone)
+    observatory_timezone = pytz.timezone(observatory_timezone)
+    print(observer)
+else:   ##### Defining Veritas as the default location #####
+    observer = Observer(location = EarthLocation.from_geodetic(
+    -110.95019*u.deg,
+    31.675*u.deg,
+    1268*u.m),
+    name = "Veritas",
+    timezone = "America/Phoenix")
+
+    observatory_timezone = tf.closest_timezone_at(lng = -110.95019,
+                                                  lat = 31.675)
+    print("Observatory timezone =" , observatory_timezone)
+    observatory_timezone = pytz.timezone(observatory_timezone)
+    print(observer)
+
+
+# Time
+print("time")
+
+if np.size(args.start) == 2:    # if full time and date information is given
+    try:
+        start = ' '.join(str(i) for i in args.start)
+        Observation_Start = dt.datetime.strptime(start , '%Y-%m-%d %H:%M:%S')
+        print("Observation Start: Local Time = ",
+              Observation_Start,
+              "Observatory Time =",
+              Observation_Start.astimezone(observatory_timezone),
+              "UTC Time = ",
+              Observation_Start.astimezone(UTC))
+    except:
+         print("Invalid time format")
+else: # np.size(args.start) == 1:  # if only time information is given
+    try:    # creates a time object with today's date and the given time
+        fmt1 = '%Y-%m-%d' #%H:%M:%S %Z%z'
+        start = (local_timezone.localize(current_time).strftime(fmt1),
+                 args.start[0])
+        start = ' '.join(str(i) for i in start)
+        print("y=",start)
+        Observation_Start = dt.datetime.strptime(start , '%Y-%m-%d %H:%M')
+        # could be improved using the
+        # command .datetime_to_astropy_time()
+        print("Observation Start: Local Time = ",
+                Observation_Start,
+                "Observatory Time =",
+                Observation_Start.astimezone(observatory_timezone),
+                "UTC Time = ",
+                Observation_Start.astimezone(UTC))
+    except:
+        print("Observation Start: Local Time = ",
+               args.start,
+               "Observatory Time =",
+               args.start.astimezone(observatory_timezone),
+               "UTC Time = ",
+               args.start.astimezone(UTC))
+
+#.strftime(fmt)
+
+if np.size(args.end) == 2:    # if full time and date information is given
+    try:
+        end = ' '.join(str(i) for i in args.end)
+        Observation_End = dt.datetime.strptime(end , '%Y-%m-%d %H:%M:%S')
+        print("Observation End: Local Time = ",
+              Observation_End,
+              "Observatory Time =",
+              Observation_End.astimezone(observatory_timezone),
+              "UTC Time = ",
+              Observation_End.astimezone(UTC))
+    except:
+        print("Invalid time format")
+else: # np.size(args.start) == 1:  # if only time information is given
+    try:
+        fmt1 = '%Y-%m-%d' #%H:%M:%S %Z%z'
+        end = (local_timezone.localize(current_time).strftime(fmt1),
+                 args.end[0])
+        end = ' '.join(str(i) for i in end)
+        Observation_End = dt.datetime.strptime(end , '%Y-%m-%d %H:%M')
+        print("Observation End: Local Time = ",
+                Observation_End,
+                "Observatory Time =",
+                Observation_End.astimezone(observatory_timezone),
+                "UTC Time = ",
+                Observation_End.astimezone(UTC))
+    except:
+        print("Observation End: Local Time = ",
+               args.end,
+               "Observatory Time =",
+               args.end.astimezone(observatory_timezone),
+               "UTC Time = ",
+               args.end.astimezone(UTC))
+
+# Target
+print("target")
+
+### tries to read argument as list of targets in a .txt file ###
+### if that fails, tries to read argument as single target #####
+### if both fail, prints "No valid target given" ###############
+
+
+try:
+    try:
+        target_table = ascii.read(args.target[0])
+        targets = [FixedTarget(coord = SkyCoord(ra=ra*u.deg,
+                                                dec=dec*u.deg),
+                                                name=name)
+                                            for name , ra , dec in target_table]
+        print(targets)
+    except:
+        target_table = ascii.read(args.target[0])
+        targets = [FixedTarget.from_name(list(target_table[i])[0])
+                                     for i in range(np.size(target_table))]
+        print(targets)
+except:
+    if np.size(args.target) == 4:   # In case somebody enters a two word Name
+                                    # like Crab Nebula and also inputs
+                                    # coordinates
+        name = (args.target[0] , args.target[1])
+        name = ' '.join(str(i) for i in name)
+        coord = SkyCoord(ra = float(args.target[2])*u.deg,
+        dec = float(args.target[3])*u.deg)
+        target = FixedTarget(coord = coord , name = name)
+        print(target)
+    elif np.size(args.target) == 3:   # runs if name and coordinates are given
+        coord = SkyCoord(ra = float(args.target[1])*u.deg,
+        dec = float(args.target[2])*u.deg)
+        target = FixedTarget(coord = coord , name = args.target[0])
+        print(target)
+
+    elif np.size(args.target) == 2: # runs if two target arguments are given
+                                    # checks if the given arguments are float
+                                    # or string in case an object name consists
+                                    # of two words eg. Crab Nebula so not to
+                                    # confuse two strings with two floats
+        try:
+            target=FixedTarget.from_name(' '.join(str(i) for i in args.target))
+            print(target)
+        except:
+            coord = SkyCoord(ra = float(args.target[0])*u.deg,
+            dec = float(args.target[1])*u.deg)
+            target = FixedTarget(coord = coord , name = "Target Object")
+            print(target)
+
+    else:   # runs if a single argument is given
+        try:
+            target = FixedTarget.from_name(args.target[0])
+            print(target)
+        except:
+            print("No valid target given")
+
+###################################################################
