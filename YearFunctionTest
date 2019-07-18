@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+
+import ClassDraft4 as cd
+
+Veritas = cd.Location.Veritas_location()
+
+# target = cd.targets.target_from_name('Betelgeuse')
+target = cd.targets.target_from_name('Vega')
+
+Default_range = cd.Time_window.time_range()#'2019-11-16 03:24' , '2019-11-16 07:00')
+print(Default_range)
+constraints = cd.limits(Veritas[0] , Default_range[0]).limits()
+
+
+print(target)
+
+
+# month_check = cd.schedule.month_check(target)
+#print(month_check)
+week_check = cd.schedule.week_check(target)
+
+# f = open("/home/heap/Documents/Year_Check.txt", "w")
+# f.write(year_check)
+# f.close()
