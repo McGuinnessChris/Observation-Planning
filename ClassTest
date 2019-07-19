@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+
+import ClassDraft4 as cd
+import numpy as np
+
+from_name = cd.Location.location_from_name('keck')
+print("from name:" , from_name)
+
+
+from_coords = cd.Location.location_from_coordinates(-6 , 53.35 , 6)
+print("from coords:" , from_coords)
+
+
+Veritas = cd.Location.Veritas_location()
+print("Veritas location:" , Veritas)
+
+################################################################################
+
+start = cd.Time_window.start('1997-07-05 15:04')
+print("start:" , start)
+
+
+end = cd.Time_window.end('1997-07-05 17:04')
+print("end:" , end)
+
+
+time_range = cd.Time_window.time_range('2007-07-11 02:04' , '2007-07-11 12:04')
+print("range:" , time_range)
+
+Default_range = cd.Time_window.time_range()
+print("default range = " , Default_range)
+
+
+window = cd.Time_window.time_window('2007-07-05 15:04' , '2007-07-05 20:04')
+print("time window:" , window)
+
+Default_window = cd.Time_window.time_window()
+print("default window = " , Default_window)
+
+
+print("local time = " , cd.Time_window.local_time())
+
+
+local_to_UTC = cd.Time_window.local_to_UTC()
+print("local to UTC = " , local_to_UTC)
+
+
+ob_to_UTC = cd.Time_window.observatory_to_UTC('2017-07-05 15:04',
+                                              '2017-07-05 17:04',
+                                              str(from_coords[1]))
+print("ob to UTC = " , ob_to_UTC)
+
+
+UTC_to_ob = cd.Time_window.UTC_to_observatory('2017-07-05 15:04',
+                                              '2017-07-05 17:04',
+                                              str(from_coords[1]))
+print("UTC to ob = " , UTC_to_ob)
+
+################################################################################
+
+sun_local = cd.sun_moon_info.sun_info_UTC(from_coords[0],
+                                              '2019-07-09 22:00')
+print("sun info UTC =" , sun_local)
+
+sun_observatory = cd.sun_moon_info.sun_info_observatory(from_coords[0],
+                                              '2019-07-09 22:00')
+print("observatory sun info =" , sun_observatory)
+
+moon_local = cd.sun_moon_info.moon_info_UTC(from_coords[0],
+                                              '2019-07-09 22:00')
+print("moon info UTC =" , moon_local)
+
+moon_observatory = cd.sun_moon_info.moon_info_observatory(from_coords[0],
+                                              '2019-07-09 22:00')
+print("observatory moon info =" , moon_observatory)
+
+
+evening_twilight = cd.sun_moon_info.twilight_evening_UTC(Veritas[0],
+                                                           '2019-07-09 22:00')
+print("evening twilight = " , evening_twilight)
+
+
+morning_twilight = cd.sun_moon_info.twilight_morning_UTC(Veritas[0],
+                                                           '2019-07-09 22:00')
+print("morning twilight = " , morning_twilight)
+
+
+
+evening_twilight_obs = cd.sun_moon_info.twilight_evening_observatory(Veritas[0],
+                                                           '2019-07-09 22:00',
+                                                           str(Veritas[1]))
+print("evening twilight obs = " , evening_twilight_obs)
+
+
+morning_twilight_obs = cd.sun_moon_info.twilight_morning_observatory(Veritas[0],
+                                                           '2019-07-09 22:00',
+                                                           str(Veritas[1]))
+print("morning twilight obs = " , morning_twilight_obs)
+
+
+################################################################################
+
+
+orion = cd.targets.target_from_name('orion')
+print(orion)
+horsehead_nebula = cd.targets.target_from_name('horsehead nebula')
+print(horsehead_nebula)
+
+orion_coord = cd.targets.target_from_coordinates(orion , 83.8 , -5.4)
+print(orion_coord)
+
+
+##### targets1 is a text file with only one target in it
+targets1 = cd.targets.target_list_names('/home/heap/Documents/Test1.txt')
+print("targets1 = " , targets1)
+
+##### targets2 is a text file with multiple targets in it
+targets2 = cd.targets.target_list_coordinates('/home/heap/Documents/Test2.txt')
+print("targets2 = " , targets2)
+####################################################################################################
+rise_check = cd.Time_window.observatory_to_UTC('2019-7-17 04:06',
+                                              '2019-7-17 10:54',
+                                              str(Veritas[1]))
+rise = cd.targets.target_rise_times(Veritas[0],
+                                    targets2,
+                                    rise_check[0])
+print("rise = " , rise)
+
+set = cd.targets.target_set_times(Veritas[0] , targets2 , '2019-07-16 22:00')
+print("set = " , set)
+
+
+
+separation1 = cd.targets.target_moon_separation(Veritas[0] , targets1 , window)
+print(targets1[0].name , ":" , separation1)
+
+print(targets2)
+separation2 = cd.targets.target_moon_separation(Veritas[0] , targets2 , window)
+print(separation2)
+
+print("size = " , np.size(targets2))
+for i in range(np.size(targets2)):
+    print(targets2[i].name , ":" , separation2[i])
+
+
+################################################################################
+time_range = cd.Time_window.time_range('2019-07-14 02:04' , '2019-07-14 12:04')
+
+from astropy.time import Time
+print("range = " , Time(Default_range[0]) , Time(Default_range[1]))
+
+test_range = cd.Time_window.time_range('2019-07-17 22:30' , '2019-07-17 14:54')
+time_range = cd.Time_window.time_range('2019-07-02 02:04' , '2019-07-02 12:04')
+constraints = cd.limits(Veritas[0] , time_range[0]).limits()
+# constraints = cd.limits(Veritas[0] , Default_range[0]).limits()
+print(constraints)
+
+
+################################################################################
+
+### changed night constraint to twilight civil for tests with Dublin times
+### needs to be changed back to astronomical for Veritas
+
+observable = cd.observability(constraints , Veritas[0] , targets2 ,
+                              time_range).ever_observable()
+# observable = cd.observability(constraints , Veritas[0] , targets2 ,
+#                               Default_range).ever_observable()
+print("is observable:" , observable)
+print("time range = " , time_range)
+when = cd.observability(constraints ,  Veritas[0] ,
+                        targets2 , time_range).when_observable()
+# when = cd.observability(constraints ,  Veritas[0] ,
+#                         targets2 , Default_range).when_observable()
+print(when)
+
+
+check = cd.observability(constraints , Veritas[0] , targets2 ,
+                              time_range).check()
+print(check)
+# I think that months observable works but it takes a while to check
+# months = cd.observability.when_observable(constraints , Veritas[0] , targets2)
+# print("months = " , months)
+
+###############################################################################
+
+
+# Default_exposure = cd.schedule.exposures_default()
+# print("default exposure info = " , Default_exposure)
+
+### exp has 7 entries, one for each target
+# exp = [100 , 60 , 40 , 40 , 100 , 120 , 80]
+# manual_exposure_info = cd.schedule.exposure_info(exp)
+# print("manual exposure info = " , manual_exposure_info)
+# print("exposure info 0" , manual_exposure_info[0])
+### need to make sure that observation_blocks() takes either a list of targets
+### as seen with blocks2 or a single target like with blocks1
+### if a list with a single entry is given as the argument, then the
+### function wont work
+# print(Default_exposure[0])
+# print(Default_exposure[1])
+# print(Default_exposure[2])
+
+# blocks1 = cd.schedule.observation_blocks(targets1[0] , Default_exposure[0],
+#                                 Default_exposure[1],
+#                                 Default_exposure[2])
+# print("blocks1 = " , blocks1)
+#
+# blocks2 = cd.schedule.observation_blocks(targets = targets2,
+#                                 exposure_times = manual_exposure_info[0],
+#                                 readout_time = manual_exposure_info[1],
+#                                 no_of_exposures = manual_exposure_info[2],
+#                                 start_time = Default_range[0],
+#                                 end_time = Default_range[1])
+# print("blocks2 = " , blocks2)
+# print("block 2 size = " , np.size(blocks2))
+
+
+# print(targets2[0])
+# test = cd.schedule.block(targets1[0])
+test = cd.schedule.block(targets2[0] , time_range[0] , time_range[1])
+print(test)
+
+f = open("/home/heap/Documents/Schedule.txt", "w")
+f.write(test)
+f.close()
+
+
+time_range = cd.Time_window.time_range('2019-07-01 02:04' , '2019-07-01 12:04')
+
+
+# this function needs to calculate constraints at the start of each night
+# to do that it should calculate AstronomicalTwilight each night
+# year_check = cd.schedule.year_check(targets2[0] , Veritas[0] ,
+#                                     Default_range)
+# print(year_check)
+# f = open("/home/heap/Documents/Year_Check.txt", "w")
+# f.write(year_check)
+# f.close()
+
+
+### need to set default slew rate to Veritas slew rate
+### called the variable "transitioner" to keep consistent with
+### AstroPlan source code
+# transitioner = cd.schedule.transitions()
+# print("slew rate = " , transitioner)
+
+
+# observing_schedule = cd.schedule.schedule(constraints, transitioner , test)
+# print(observing_schedule)
+
+
+################################################################################
+################################################################################
