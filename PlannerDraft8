@@ -1,0 +1,1065 @@
+#!/usr/bin/env python3
+
+import numpy as np
+import matplotlib.pyplot as plt
+import datetime as dt
+import pytz
+from tzlocal import get_localzone
+
+import astroplan
+from astroplan import FixedTarget
+from astroplan import Observer
+from astroplan import (AltitudeConstraint,
+                       AirmassConstraint,
+                       AtNightConstraint,
+                       MoonSeparationConstraint)
+from astroplan import (is_observable,
+                       is_always_observable,
+                       months_observable)
+from astroplan import observability_table
+
+import astropy
+from astropy.time import Time
+from astropy.coordinates import EarthLocation
+from astropy.coordinates import SkyCoord
+from astropy import coordinates
+import astropy.units as u
+from astropy.io import ascii
+from astropy.table import Table, Column
+
+from timezonefinder import TimezoneFinder
+tf = TimezoneFinder()
+
+### This commented code needs to be run every two weeks to keep
+### AstroPlan up to date
+
+# from astroplan import download_IERS_A
+# download_IERS_A()
+
+### imports class to get constraints for VERITAS
+import ClassDraft4 as cd
+
+################################################################################
+########## Computer Local Time and UTC Time ####################################
+################################################################################
+
+
+fmt = '%Y-%m-%d %H:%M:%S'
+
+current_time = dt.datetime.now()
+local_timezone = get_localzone()
+
+print('Current time is' , current_time.astimezone(local_timezone))
+
+
+### assigning UTC timezone to variable UTC
+UTC = pytz.timezone('UTC')
+UTC_time = current_time.astimezone(UTC)
+print('UTC time is' , UTC_time.strftime(fmt))
+
+
+
+### Creating an Observer object for VERITAS to default to if needed,
+### as well as finding next astronomical twilight at VERITAS to define
+### default observation start and end times
+VeritasLocationDefault = Observer(location = EarthLocation.from_geodetic(
+                                  -110.95019*u.deg,
+                                  31.675*u.deg,
+                                  1268*u.m),
+                                  name = "Veritas",
+                                  timezone = "America/Phoenix")
+
+twilight_evening_astronomical_UTC_ = (
+                        VeritasLocationDefault.twilight_evening_astronomical(
+                        Time(dt.datetime.now()),#.astimezone(UTC)),
+                        which='next') )
+
+startDefault = twilight_evening_astronomical_UTC_.strftime('%Y-%m-%d %H:%M')
+
+
+
+twilight_morning_astronomical_UTC_ = (
+                        VeritasLocationDefault.twilight_morning_astronomical(
+                        Time(twilight_evening_astronomical_UTC_),
+                        which='next') )
+endDefault = twilight_morning_astronomical_UTC_.strftime('%Y-%m-%d %H:%M')
+
+
+
+################################################################################
+########## ArgParse Arguments ##################################################
+################################################################################
+
+
+import argparse
+parser = argparse.ArgumentParser()
+
+######################################################################
+
+
+parser.add_argument("-s" ,
+                    "--start",
+                    help = "Observation start time (UTC) as "+
+                    "hh:mm (in 24hr time). Defaults to the time and date on "+
+                    "which this program is being run. Can also be given as "+
+                    "yyyy-mm-dd hh:mm:ss using the first argument for the "+
+                    "desired date and the second for the desired time.",
+                    default = dt.datetime.strptime(startDefault,
+                                                   '%Y-%m-%d %H:%M'),
+                    nargs = "+")
+
+
+######################################################################
+
+
+parser.add_argument("-e",
+                    "--end",
+                    help = "Observation end time (UTC) as "+
+                    "hh:mm (in 24hr time). Defaults to the time and date on "+
+                    "which this program is being run. Can also be given as "+
+                    "yyyy-mm-dd hh:mm:ss using the first argument for the "+
+                    "desired date and the second for the desired time.",
+                    default = dt.datetime.strptime(endDefault,
+                                                   '%Y-%m-%d %H:%M'),
+                    nargs = "+")
+
+
+######################################################################
+
+
+parser.add_argument("-p",
+                    "--precision",
+                    help = "The number of steps between the start and end "+
+                    "time. The higher the number the more calculations will "+
+                    "be done. Defaults to 3. Higher number yields more "+
+                    "precision if using this script to tracking a target's "+
+                    "elevation over a night, for example. ",
+                    default = 3,
+                    type = int)
+
+
+######################################################################
+
+
+parser.add_argument("-l",
+                    "--location",
+                    help = "Takes the name of the observatory being used "+
+                    "and finds the coordinates from a list of observatories. "+
+                    " Use -o for list of observatories. ",
+                    type = str)
+
+
+######################################################################
+
+
+parser.add_argument("-c",
+                    "--coordinates",
+                    help = "Takes observer coordinates as longitude (deg), "+
+                    "latitude (deg), elevation (m). Defaults to the Veritas "+
+                    "site if no argument given. ",
+                    type = float,
+                    nargs = 3)
+                    #default = [-110.95019 , 31.675 , 1268])
+
+
+######################################################################
+
+
+parser.add_argument("-o",
+                    "--observatories",
+                    action = 'store_true',
+                    help = "Type -o for list of recorded observatories.")
+
+
+######################################################################
+
+# could be split into target and file for a .txt file
+parser.add_argument("-t",
+                    "--target",
+                    help = "Takes either a single target or a list of "+
+                    "targets. Give target names in the format 'name'. "+
+                    "A list of targets must be given as the location "+
+                    "of a .txt file. The .txt file must contain either target "+
+                    "names only or target name with RA and Dec in degrees. "+
+                    "Can calculate RA and Dec automatically "+
+                    "from target name but also accepts manual input of RA "+
+                    "and Dec. For a single target, its information can be "+
+                    "given using 1-3 arguments. Given 1 argument: Takes "+
+                    "given argument as the name of the target object "+
+                    "and finds its Right Ascension and Declination. "+
+                    "Given 2 arguments: Takes the first given argument as "+
+                    "the Right Ascension (deg) and the second as the "+
+                    "Declination (deg) of the target object. "+
+                    "Given 3 arguments: Takes first argument as the target "+
+                    "name, the second argument as the target Right Ascension "+
+                    "(deg) and the third argument as the target "+
+                    "Declination (deg). ",
+                    nargs = "+")
+
+
+######################################################################
+
+args = parser.parse_args()
+
+
+
+################################################################################
+########## Observer location and observation start and end #####################
+################################################################################
+
+
+##### Observer #################################################################
+
+### Most of Astroplan works using Observer objects,
+### which are made from EarthLocation objects. EarthLocation
+### can be configured to work using either the
+### names of locations or their coordinates if they are not listed.
+### Using this information, the following function will always return an
+### Observer object assigned to the variable "observer".
+### The function will default to Veritas if no location is given.
+
+
+### TimezoneFinder and pytz both share a common list of timezone names.
+### This common list is also used by Astropy and Astroplan, however
+### timezones are not automatically assigned by Astropy or Astroplan.
+### Because of this, this part of the script also creates a variable called
+### observatory_timezone which will be used in many calculations later.
+
+
+if args.observatories == True:
+    print(astropy.coordinates.EarthLocation.get_site_names())
+elif args.location != None: # uses site name to find coordinates
+                            # and time zone of named observatory
+    observer = EarthLocation.of_site(args.location)
+    # use .geodetic to extract latitude and longitude
+    observatory_timezone = tf.closest_timezone_at(
+                                        lng=float(observer.geodetic[0]/u.deg),
+                                        lat=float(observer.geodetic[1]/u.deg))
+    observer = Observer.at_site(args.location,
+                                timezone = observatory_timezone)
+    observatory_timezone = pytz.timezone(observatory_timezone)
+elif args.coordinates != None:
+    observer = Observer(location = EarthLocation.from_geodetic(
+    args.coordinates[0]*u.deg,
+    args.coordinates[1]*u.deg,
+    args.coordinates[2]*u.m),
+    name = "Observer Location",
+    timezone = tf.closest_timezone_at(lng = args.coordinates[0],
+                              lat = args.coordinates[1]))
+    observatory_timezone = tf.closest_timezone_at(lng = args.coordinates[0],
+                                                  lat = args.coordinates[1])
+    observatory_timezone = pytz.timezone(observatory_timezone)
+else:   ##### Defining Veritas as the default location #####
+    observer = Observer(location = EarthLocation.from_geodetic(
+    -110.95019*u.deg,
+    31.675*u.deg,
+    1268*u.m),
+    name = "Veritas",
+    timezone = "America/Phoenix")
+
+    observatory_timezone = tf.closest_timezone_at(lng = -110.95019,
+                                                  lat = 31.675)
+    observatory_timezone = pytz.timezone(observatory_timezone)
+
+print(observer)
+
+
+
+##### Time #####################################################################
+
+### This section uses the times specified as observation start and end
+### times to create two variables: "Observation_Start" and "Observation_End".
+### These will then be used in the later calculations, such as finding
+### moon phase and illumination. If no times are specified, both will
+### default to the next astronomical twilight at VERITAS.
+
+
+if np.size(args.start) == 2:    # if full time and date information is given
+
+    try:
+        start = ' '.join(str(i) for i in args.start)
+        Observation_Start = dt.datetime.strptime(start , '%Y-%m-%d %H:%M:%S')
+
+    except:
+         print("Invalid time format")
+
+else: # np.size(args.start) == 1:  # if only time information is given, will
+                                   # default to date the script is run on
+
+    try:    # creates a time object with today's date and the given time
+        fmt1 = '%Y-%m-%d' #%H:%M:%S %Z%z'
+        start = (local_timezone.localize(current_time).strftime(fmt1),
+                 args.start[0])
+
+                 # join() is being used to combine the two given arguments,
+                 # date and time into one string with a space between them
+                 # in the string
+        start = ' '.join(str(i) for i in start)
+        print("y=",start)
+        Observation_Start = dt.datetime.strptime(start , '%Y-%m-%d %H:%M')
+
+    except:
+        Observation_Start = args.start
+
+
+
+
+if np.size(args.end) == 2:    # if full time and date information is given
+
+    try:    # join() is being used to combine the two given arguments, date and
+            # time into one string with a space between them in the string
+        end = ' '.join(str(i) for i in args.end)
+        Observation_End = dt.datetime.strptime(end , '%Y-%m-%d %H:%M:%S')
+
+    except:
+        print("Invalid time format")
+
+else: # np.size(args.start) == 1:  # if only time information is given
+
+    try:
+        fmt1 = '%Y-%m-%d' #%H:%M:%S %Z%z'
+        end = (local_timezone.localize(current_time).strftime(fmt1),
+                 args.end[0])
+        end = ' '.join(str(i) for i in end)
+        Observation_End = dt.datetime.strptime(end , '%Y-%m-%d %H:%M')
+
+    except:
+        Observation_End = args.end
+
+
+################################################################################
+################################################################################
+
+# Defining the observation time window in UTC Time
+
+fmt2 = '%Y-%m-%d %H:%M:%S.%f'
+fmt3 = '%Y-%m-%d %H:%M'
+
+
+# start = Observation_Start.astimezone(observatory_timezone)
+# end = Observation_End.astimezone(observatory_timezone)
+start = Observation_Start.astimezone(UTC)
+end = Observation_End.astimezone(UTC)
+
+### time range, a Time object with two times in it, is required for some of the
+### functions in AstroPlan instead of just a single Time object
+time_range = Time([Observation_Start.strftime(fmt3),
+                   Observation_End.strftime(fmt3)])
+# print("Time Range = " , time_range)
+
+
+### creating a list of time objects. Later in the script the angular separation
+### between the moon and each target will be calculated at each time in
+### the variable time_window
+if start == end:
+    args.precision == 1
+    time_window = start
+else:
+    time_window = start + (end - start) * np.linspace(0 , 1 , args.precision)
+
+
+
+################################################################################
+################################################################################
+
+
+### Printing time information. Will be changed later to log to a file
+
+
+
+# print("Observatory timezone =" , observatory_timezone)
+#
+# events = [('Observation Start',
+#             Observation_Start.astimezone(local_timezone),
+#             Observation_Start.astimezone(observatory_timezone).strftime(fmt3),
+#             Observation_Start.astimezone(UTC).strftime(fmt3)),
+#           ('Observation End',
+#             Observation_End.astimezone(local_timezone),
+#             Observation_End.astimezone(observatory_timezone).strftime(fmt3),
+#             Observation_End.astimezone(UTC).strftime(fmt3))]
+# t = Table(rows = events, names=('Event' , 'Local Time',
+#                                 'Observatory Time' , 'UTC Time'))
+# print(t)
+
+print("Observatory timezone =" , observatory_timezone)
+
+events = [('Observation Start',
+            start.astimezone(local_timezone).strftime(fmt3),
+            start.astimezone(observatory_timezone).strftime(fmt3),
+            start.astimezone(UTC).strftime(fmt3)),
+          ('Observation End',
+            end.astimezone(local_timezone).strftime(fmt3),
+            end.astimezone(observatory_timezone).strftime(fmt3),
+            end.strftime(fmt3))]
+t = Table(rows = events, names=('Event' , 'Local Time',
+                                'Observatory Time' , 'UTC Time'))
+print(t)
+
+################################################################################
+########## Sun and Moon Information ############################################
+################################################################################
+
+
+### Sun and moon information is calculated for the location of the observatory.
+### This defaults to Veritas, but will work for other locations if specified.
+
+### For some reason (at the time of writing this script) the functions
+### for calculating rise and set times always output in UTC Time.
+### Because of this the functions strptime() and strftime() need
+### to be used a lot to change the time output for rise and set times
+### into a format which is operable on by the astimezone() function, to find
+### the local times for each.
+
+
+
+################################################################################
+##### Sunrise and Sunset #######################################################
+
+
+sunrise_UTC = observer.sun_rise_time(Time(Observation_Start.astimezone(UTC)),
+                                 which='next')
+
+
+sunrise_at_observatory = observer.astropy_time_to_datetime(
+                                                    sunrise_UTC).strftime(fmt3)
+
+
+######################################################################
+
+
+sunset_UTC = observer.sun_set_time(Time(Observation_End.astimezone(UTC)),
+                               which='next')
+
+
+sunset_at_observatory = observer.astropy_time_to_datetime(
+                                                     sunset_UTC).strftime(fmt3)
+
+
+################################################################################
+##### Moonrise, moonset and moon phase #########################################
+
+
+moonrise_UTC = observer.moon_rise_time(Time(Observation_Start.astimezone(UTC)),
+                                 which='next')
+# moonrise_at_observatory = (
+#     dt.datetime.strptime(moonrise_UTC.iso , fmt2))
+
+moonrise_at_observatory = observer.astropy_time_to_datetime(
+                                                    moonrise_UTC).strftime(fmt3)
+
+
+######################################################################
+
+
+moonset_UTC = observer.moon_set_time(Time(Observation_End.astimezone(UTC)),
+                               which='next')
+
+
+moonset_at_observatory = observer.astropy_time_to_datetime(
+                                                    moonset_UTC).strftime(fmt3)
+
+moon_phase = observer.moon_phase(Observation_Start)
+
+moon_illumination = observer.moon_illumination(Observation_Start)
+
+
+######################################################################
+
+
+### Midnight information
+
+midnight_UTC = observer.midnight(Time(Observation_Start.astimezone(UTC)),
+                                 which='next')
+
+
+midnight_at_observatory = observer.astropy_time_to_datetime(midnight_UTC).strftime(fmt3)
+
+
+altaz_moon_midnight = observer.moon_altaz(midnight_UTC)
+
+
+######################################################################
+
+
+### Moon Information
+
+### For some reason, the moon phase returns an angle in radians, with
+### zero corresponding to a full moon and pi radians corresponding
+### to a new moon, hence the formula below so that the program
+### displays a full moon as 1 and a new moon as 0
+
+
+# print("Moon Phase = " , "%.3f" %(1 - (moon_phase / u.rad) / np.pi))
+# print("Moon Illumination = " , "%.3f" %moon_illumination)
+print("Observatory Midnight UTC = " , midnight_UTC.iso , "UTC Time")
+
+# moon altitude and azimuth
+# print("Moon information at midnight ",
+#       "Altitude = ",
+#       "%.3f" %((altaz_moon_midnight).alt /u.deg) *u.deg,
+#       "Azimuth = ",
+#       "%.3f" %((altaz_moon_midnight).az /u.deg) *u.deg)
+
+
+altaz_moon_now = observer.moon_altaz(current_time)
+# print("Moon information now: ",
+#       "Altitude = ",
+#       "%.3f" %((altaz_moon_now).alt /u.deg) *u.deg,
+#       "Azimuth = ",
+#       "%.3f" %((altaz_moon_now).az /u.deg) *u.deg)
+
+
+events = [('Alt/Az Now' , ("Alt = ",
+                       "%.3f" %((altaz_moon_now).alt /u.deg) *u.deg,
+                       "Az = ",
+                       "%.3f" %((altaz_moon_now).az /u.deg) *u.deg)),
+          ('Alt/Az MN', ("Alt = ",
+                    "%.3f" %((altaz_moon_midnight).alt /u.deg) *u.deg,
+                    "Az = ",
+                    "%.3f" %((altaz_moon_midnight).az /u.deg) *u.deg )),
+          ("Moon Phase = " , "%.3f" %(1 - (moon_phase / u.rad) / np.pi)),
+          ("Illumination = " , "%.3f" %moon_illumination)]
+t = Table(rows = events, names=('Moon Info' , 'Information'))
+print(t)
+
+
+
+################################################################################
+########## Twilight Calculations ###############################################
+################################################################################
+
+
+### Astroplan takes Astronomical twilight when the sun
+### is at -18 deg elevation.
+### This code was written during the summer solstice in Dublin, so the
+### sun never reached -18 deg. For this reason the script is written to
+### try and calculate nautical twilight and Civil twilight also. This
+### problem should not occur for the majority of the year in most locations.
+
+### If a calculation is not possible, a warning will trigger but the
+### script will continue to run
+
+
+##### Astronomical #############################################################
+
+
+twilight_evening_astronomical_UTC = observer.twilight_evening_astronomical(
+                                Time(Observation_Start.astimezone(UTC)),
+                                which='next')
+
+try:
+    # twilight_evening_astronomical_observatory = (
+    #     dt.datetime.strptime(twilight_evening_astronomical_UTC.iso , fmt2) )
+
+    twilight_evening_astronomical_observatory = (
+    observer.astropy_time_to_datetime(
+                            twilight_evening_astronomical_UTC).strftime(fmt3) )
+
+except:
+    twilight_evening_astronomical_observatory = "N/A"
+
+
+######################################################################
+
+
+twilight_morning_astronomical_UTC = observer.twilight_morning_astronomical(
+                                Time(Observation_Start.astimezone(UTC)),
+                                which='next')
+
+try:
+    # twilight_morning_astronomical_observatory = (
+    #     dt.datetime.strptime(twilight_morning_astronomical_UTC.iso , fmt2))
+
+    twilight_morning_astronomical_observatory = (
+    observer.astropy_time_to_datetime(
+                            twilight_morning_astronomical_UTC).strftime(fmt3) )
+
+except:
+    twilight_morning_astronomical_observatory = "N/A"
+
+
+##### Nautical #################################################################
+
+
+twilight_evening_nautical_UTC = observer.twilight_evening_nautical(
+                                Time(Observation_Start.astimezone(UTC)),
+                                which='next')
+
+# twilight_evening_nautical_observatory = (
+#     dt.datetime.strptime(twilight_evening_nautical_UTC.iso , fmt2))
+
+twilight_evening_nautical_observatory = (
+observer.astropy_time_to_datetime(
+                                twilight_evening_nautical_UTC).strftime(fmt3) )
+
+
+######################################################################
+
+
+twilight_morning_nautical_UTC = observer.twilight_morning_nautical(
+                                Time(Observation_Start.astimezone(UTC)),
+                                which='next')
+
+# twilight_morning_nautical_observatory = (
+#     dt.datetime.strptime(twilight_morning_nautical_UTC.iso , fmt2))
+
+twilight_morning_nautical_observatory = (
+observer.astropy_time_to_datetime(
+                                twilight_morning_nautical_UTC).strftime(fmt3) )
+
+
+##### Civil ####################################################################
+
+
+twilight_evening_civil_UTC = observer.twilight_evening_civil(
+                                Time(Observation_Start.astimezone(UTC)),
+                                which='next')
+
+# twilight_evening_civil_observatory = (
+#     dt.datetime.strptime(twilight_evening_civil_UTC.iso , fmt2))
+
+twilight_evening_civil_observatory = (
+observer.astropy_time_to_datetime(twilight_evening_civil_UTC).strftime(fmt3) )
+
+######################################################################
+
+twilight_morning_civil_UTC = observer.twilight_morning_civil(
+                                Time(Observation_Start.astimezone(UTC)),
+                                which='next')
+
+# twilight_morning_civil_observatory = (
+#     dt.datetime.strptime(twilight_morning_civil_UTC.iso , fmt2))
+
+twilight_morning_civil_observatory = (
+observer.astropy_time_to_datetime(twilight_morning_civil_UTC).strftime(fmt3) )
+
+
+################################################################################
+
+
+### Printing time information
+
+
+### I think that astroplan is calculating sunrise as some kind of twilight.
+### If this is the case, then sunset, moonrise and moonset might not
+### be accurate to actual rise and set times.
+
+
+events = [('Sunrise' , sunrise_at_observatory , sunrise_UTC.iso),
+          ('Sunset' , sunset_at_observatory , sunset_UTC.iso),
+          ('Moonrise' , moonrise_at_observatory , moonrise_UTC.iso),
+          ('Moonset' , moonset_at_observatory , moonset_UTC.iso),
+          ('Evening Astronomical Twilight',
+          twilight_evening_astronomical_observatory,
+          twilight_evening_astronomical_UTC.iso),
+          ('Morning Astronomical Twilight',
+          twilight_morning_astronomical_observatory,
+          twilight_morning_astronomical_UTC.iso),
+          ('Evening Nautical Twilight',
+          twilight_evening_nautical_observatory,
+          twilight_evening_nautical_UTC.iso),
+          ('Morning Nautical Twilight',
+          twilight_morning_nautical_observatory,
+          twilight_morning_nautical_UTC.iso),
+          ('Evening Civil Twilight',
+          twilight_evening_civil_observatory,
+          twilight_evening_civil_UTC.iso),
+          ('Morning Civil Twilight',
+          twilight_morning_civil_observatory,
+          twilight_morning_civil_UTC.iso)]
+t = Table(rows = events, names=('Event' , 'Observatory Time' , 'UTC Time'))
+print(t)
+
+
+
+################################################################################
+########## Defining Targets ####################################################
+################################################################################
+
+
+
+### Astropy and Astroplan use FixedTarget objects to to calculations
+### using the locations of desired targets. The coordinates of these
+### FixedTarget objects are first defined as SkyCoord objects. Since
+### Some functions within Astroplan and Astropy take FixedTarget objects
+### and some take SkyCoord objects, care had to be taken when writing this
+### section of the script. To further complicate things, some functions
+### can take int or float type arguments while others only take strings
+### or require correct Astropy Units to be specified for the arguments.
+
+### Returns variable "target" for a single target
+### Returns variable "targets" for a list of targets
+### The script will try to read argument as list of targets in a .txt file.
+### If that fails, tries to read argument as single target.
+### If both fail, prints "No valid target given"
+
+
+### The "try" tries to make the input into a valid target
+### object for each argument in a list of given targets.
+### The except tries to make the input into a valid target
+### object for a single target.
+
+
+
+try:
+
+    try:
+        target_table = ascii.read(args.target[0])
+        targets = [FixedTarget(coord = SkyCoord(ra=ra*u.deg,
+                                                dec=dec*u.deg),
+                                                name=name)
+                                            for name , ra , dec in target_table]
+        #print(targets)
+
+    except:
+        target_table = ascii.read(args.target[0])
+        targets = [FixedTarget.from_name(list(target_table[i])[0])
+                                     for i in range(np.size(target_table))]
+        #print(targets)
+
+
+
+except:
+
+    if np.size(args.target) == 4:   # In case somebody enters a two word Name
+                                    # like Crab Nebula and also inputs
+                                    # coordinates
+        name = (args.target[0] , args.target[1])
+        name = ' '.join(str(i) for i in name)
+        coord = SkyCoord(ra = float(args.target[2])*u.deg,
+        dec = float(args.target[3])*u.deg)
+        target = FixedTarget(coord = coord , name = name)
+        #print(target)
+
+    elif np.size(args.target) == 3:   # runs if name and coordinates are given
+        coord = SkyCoord(ra = float(args.target[1])*u.deg,
+        dec = float(args.target[2])*u.deg)
+        target = FixedTarget(coord = coord , name = args.target[0])
+        #print(target)
+
+
+    elif np.size(args.target) == 2: # runs if two target arguments are given
+                                    # checks if the given arguments are float
+                                    # or string in case an object name consists
+                                    # of two words eg. Crab Nebula so not to
+                                    # confuse two strings with two floats
+
+        try:
+            target=FixedTarget.from_name(' '.join(str(i) for i in args.target))
+            #print(target)
+
+        except:
+            coord = SkyCoord(ra = float(args.target[0])*u.deg,
+            dec = float(args.target[1])*u.deg)
+            target = FixedTarget(coord = coord , name = "Target Object")
+            #print(target)
+
+    else:   # runs if a single argument is given
+
+        try:
+            target = FixedTarget.from_name(args.target[0])
+            #print(target)
+
+        except:
+            print("No valid target given")
+
+
+
+################################################################################
+########## Constraints #########################################################
+################################################################################
+
+constraints = cd.limits(observer , time_range[0]).limits()
+
+
+
+################################################################################
+########## When are targets observable #########################################
+################################################################################
+
+
+##### Are they ever observable #################################################
+
+if start != end:
+    # try is for a list of targets
+    try:
+        # Are targets *ever* observable in the time range?
+        ever_observable = is_observable(constraints,
+                                        observer,
+                                        targets,
+                                        time_range = time_range)
+
+        # Are targets *always* observable in the time range?
+        always_observable = is_always_observable(constraints,
+                                                 observer,
+                                                 targets,
+                                                 time_range = time_range)
+
+        # During what months are the targets ever observable?
+        best_months = months_observable(constraints,
+                                        observer,
+                                        targets)
+
+    # except is for a single target or no targets
+    except:
+        try:
+
+            ever_observable = is_observable(constraints,
+                                            observer,
+                                            [target],
+                                            time_range = time_range)
+
+            always_observable = is_always_observable(constraints,
+                                                     observer,
+                                                     [target],
+                                                     time_range = time_range)
+
+            best_months = months_observable(constraints,
+                                            observer,
+                                            [target])
+
+        except:
+            print("No targets given, can't check observability")
+
+else:
+    print("No targets given, can't check observability")
+
+
+
+##### If ever observable, when do they rise and set ############################
+
+
+# try:
+#     for i in range(np.size(targets)):
+#         print(targets[i].name , best_months[i])
+#         # if ever_observable[i] == True:
+#         #     print(i , "=true")
+# except:
+#     try:
+#         if ever_observable == True:
+#             print(target.name , best_months)
+#     except:
+#         print("Nothing observable")
+
+rise = []
+set = []
+
+
+########## Target rise times ###################################################
+
+try:
+    print(np.size(targets))
+
+    for i in range(np.size(targets)):
+        #if ever_observable[i] == True:
+
+        target_rise_times = observer.target_rise_time(Observation_Start,
+                                                      targets[i],
+                                                      which="next")
+        if target_rise_times.iso == '-4715-02-28 12:00:00.000':
+                # rise.append("Doesn't cross horizon during this time")
+            rise.append("Doesn't rise")
+        else:
+            rise.append(target_rise_times.iso)
+
+
+except:
+    try:
+        #if ever_observable == True:
+        target_rise_time = observer.target_rise_time(Observation_Start,
+                                                     target,
+                                                     which="next")
+        rise.append(target_rise_time.iso)
+    except:
+        try:
+            target_rise_time = observer.target_rise_time(Observation_Start,
+                                                         [target],
+                                                         which="next")
+            rise.append(target_rise_time.iso)
+
+        except:
+            print("No targets given for rise")
+
+
+##########Target set times #####################################################
+
+
+try:
+    # print(np.size(targets))
+
+    for i in range(np.size(targets)):
+        #if ever_observable[i] == True:
+
+        target_set_times = observer.target_set_time(Observation_Start,
+                                                      targets[i],
+                                                      which="next")
+        if target_set_times.iso == '-4715-02-28 12:00:00.000':
+                # rise.append("Doesn't cross horizon during this time")
+            set.append("Doesn't set")
+        else:
+            set.append(target_set_times.iso)
+
+
+except:
+    try:
+        #if ever_observable == True:
+        target_set_time = observer.target_set_time(Observation_Start,
+                                                     target,
+                                                     which="next")
+        set.append(target_set_time.iso)
+    except:
+        try:
+            target_rise_time = observer.target_set_time(Observation_Start,
+                                                         [target],
+                                                         which="next")
+            set.append(target_rise_time.iso)
+
+        except:
+            print("No targets given for set")
+
+
+
+########## Table of rise and set times #########################################
+
+
+try:
+    rise_and_set = Table()
+    rise_and_set['Targets'] = [target.name for target in targets]
+    rise_and_set['Rise Time'] = rise
+    rise_and_set['Set Time'] = set
+    print(rise_and_set)
+except:
+    try:
+        rise_and_set = Table()
+        rise_and_set['Target'] = [target.name]
+        rise_and_set['Rise Time'] = rise[0]
+        rise_and_set['Set Time'] = set[0]
+        print(rise_and_set)
+    except:
+
+        print("No Target rise/set times")
+
+
+
+
+################################################################################
+########## Target-Moon Separation with Time ####################################
+################################################################################
+
+
+
+### Using the number specified with args.precision, the time between the
+### specified observation start and end times is split into that many
+### parts of equal time length. The script will then calculate the moon
+### coordinates at the start of each time section.
+### Using a loop, the moon coordinates and target coordinates are converted
+### back into SkyCoord objects so that their angular separation can be
+### calculated and the minimum angular separation can be found, hence the
+### time the minimum separation occurs at can be found.
+
+
+# this instance of coordinates is a class
+moon_coords = coordinates.get_moon(Time(time_window) , observer.location)
+# print(moon_coords)
+
+
+### Creating SkyCoord objects for each target from their FixedTarget objects
+
+target_coords = []
+
+try:
+    # the try works for a list of targets
+    for i in range(np.size(targets)):
+        #if ever_observable[i] == True:
+        object = SkyCoord(targets[i].ra , targets[i].dec)
+        target_coords.append(object)
+
+except:
+    # this try/except works for a single specified target
+    # or if there are no specified targets
+    try:
+        #if ever_observable == True:
+        object = SkyCoord(target.ra , target.dec)
+        target_coords.append(object)
+    except:
+        print("No observable targets or none given")
+
+
+# print(np.size(target_coords) , np.size(moon_coords))
+
+
+### Using moon coordinates and target coordinates to find the angular
+### separation over time of the targets visible during the observation.
+
+separations = []#[[] for _ in range(np.size(targets))]
+moons = []
+# print(target_coords)
+
+
+try:
+
+    for i in range(np.size(target_coords)):
+        #if ever_observable[i] == True:
+
+            targ = target_coords[i]
+
+
+            for j in range(np.size(moon_coords)):
+                sep = targ.separation( SkyCoord(moon_coords[j].ra,
+                                                moon_coords[j].dec) )
+                moons.append(sep)
+            separations.append(moons)
+            #returns moons to being empty
+            moons = []
+
+
+except:
+    try:
+        #if ever_observable == True:
+
+        for i in range(np.size(moon_coords)):
+                sep = target_coords[0].separation(SkyCoord(moon_coords[i].ra,
+                                                        moon_coords[i].dec))
+                moons.append(sep)
+        separations[i] = moons
+        #returns moons to being empty
+        moons = []
+
+    except:
+        print("No targets given")
+
+
+
+try:
+    for i in range(np.size(targets)):
+        print(targets[i].name , ":" , separations[i])
+except:
+    try:
+        # for i in range(np.size(target)):
+        print(target.name , ":" , separations)
+
+    except:
+        print("No targets given")
+
+################################################################################
+##### Are they within moon constraints #########################################
+
+try:
+    observability_table = Table()
+    observability_table['targets'] = [target.name for target in targets]
+    observability_table['ever_observable'] = ever_observable
+    observability_table['always_observable'] = always_observable
+    print(observability_table)
+except:
+    try:
+        observability_table = Table()
+        observability_table['targets'] = [target.name]# for target in target[0]]
+        observability_table['ever_observable'] = ever_observable
+        observability_table['always_observable'] = always_observable
+        print(observability_table)
+    except:
+        print("No targets given, can't check observability")
+
+
+# print("moon = " , moon_coords.separation(target_coords))
+################################################################################
